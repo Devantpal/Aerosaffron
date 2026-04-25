@@ -120,6 +120,21 @@ function initFirebase() {
       updateAlertsUI();
     }
   });
+  // Automation Rules
+onValue(ref(db, 'aerosaffron/automation'), (snap) => {
+  if (snap.exists()) {
+    const data = snap.val();
+
+    AeroApp.rules = Object.keys(data).map((key, index) => ({
+      id: key,
+      condition: data[key].condition,
+      action: data[key].action,
+      active: data[key].status === 1
+    }));
+
+    renderRulesTable();
+  }
+});
 }
 
 function setConnected(state) {
@@ -420,7 +435,7 @@ function loadLocalRules() {
       { id: 2, condition: 'IF humidity < 50%', action: 'THEN mist pump ON', active: true },
       { id: 3, condition: 'IF water level < 20%', action: 'THEN send alert', active: true },
     ];
-    saveLocalRules();
+    
   }
 }
 
@@ -454,10 +469,19 @@ function addRule() {
   const action = document.getElementById('inp-action').value.trim();
   if (!cond || !action) { showToast('Please fill in both fields', 'warning'); return; }
 
-  const maxId = AeroApp.rules.reduce((m, r) => Math.max(m, r.id), 0);
-  AeroApp.rules.push({ id: maxId + 1, condition: cond, action, active: true });
-  saveLocalRules();
-  renderRulesTable();
+  const ruleRef = ref(db, "aerosaffron/automation");
+
+push(ruleRef, {
+  condition: cond,
+  action: action,
+  status: 1
+})
+.then(() => {
+  showToast("Rule added to Firebase ✅");
+  document.getElementById('inp-condition').value = '';
+  document.getElementById('inp-action').value = '';
+})
+.catch(() => showToast("Failed to add rule", "error"));
   document.getElementById('inp-condition').value = '';
   document.getElementById('inp-action').value = '';
   showToast('Rule added successfully');
@@ -465,16 +489,19 @@ function addRule() {
 window.addRule = addRule;
 
 function deleteRule(id) {
-  AeroApp.rules = AeroApp.rules.filter(r => r.id !== id);
-  saveLocalRules();
-  renderRulesTable();
-  showToast('Rule deleted', 'info');
+  set(ref(db, `aerosaffron/automation/${id}`), null)
+    .then(() => showToast('Rule deleted from Firebase ✅'))
+    .catch(() => showToast('Delete failed', 'error'));
 }
 window.deleteRule = deleteRule;
 
-function toggleRule(id) {
+ function toggleRule(id) {
   const rule = AeroApp.rules.find(r => r.id === id);
-  if (rule) { rule.active = !rule.active; saveLocalRules(); renderRulesTable(); }
+  if (!rule) return;
+
+  update(ref(db, `aerosaffron/automation/${id}`), {
+    status: rule.active ? 0 : 1
+  });
 }
 window.toggleRule = toggleRule;
 
@@ -535,7 +562,6 @@ window.downloadCSV = downloadCSV;
 document.addEventListener('DOMContentLoaded', () => {
   initNav();
   initCharts();
-  loadLocalRules();
   renderRulesTable();
   renderAlertTable();
   initFirebase();
