@@ -1,0 +1,92 @@
+{
+  "aerosaffron": {
+    "alerts": {
+      "msg": "System Normal"
+    },
+    "automation": {
+      "rule1": {
+        "action": "fan_on",
+        "condition": "temperature > 30",
+        "status": 1
+      },
+      "rule2": {
+        "action": "light_on",
+        "condition": "lux < 120",
+        "status": 1
+      },
+      "rule3": {
+        "action": "peltier_on",
+        "condition": "temperature > 26",
+        "status": 1
+      }
+    },
+    "controls": {
+      "fan": 0,
+      "light": 0,
+      "peltier": 0,
+      "pump": 0,
+      "_refresh": 0
+    },
+    "device": {
+      "online": false,
+      "lastSeen": "0",
+      "ip": ""
+    },
+    "sensors": {
+      "humidity": 60,
+      "light": 200,
+      "lux": 200,
+      "temperature": 25
+    },
+    "settings": {
+      "controlMode": "auto",
+      "fanMin": 24,
+      "fanMax": 30,
+      "humSet": 65,
+      "ledEnd": "22:00",
+      "ledStart": "06:00",
+      "lightMin": 120,
+      "lightMax": 350,
+      "mistDuration": 30,
+      "mistInterval": 15,
+      "peltierMin": 18,
+      "peltierMax": 26,
+      "tempSet": 23
+    },
+    "users": {
+      "adminAerosaffronBootstrap": {
+        "createdAt": 0,
+        "email": "admin@aerosaffron.com",
+        "emailVerified": true,
+        "lastLoginAt": 0,
+        "mobile": "",
+        "name": "AeroSaffron Admin",
+        "provider": "local_admin",
+        "role": "admin",
+        "status": "active"
+      },
+      "sampleUserUid": {
+        "createdAt": 0,
+        "email": "user@example.com",
+        "emailVerified": false,
+        "lastLoginAt": 0,
+        "mobile": "+91 9876543210",
+        "name": "Demo User",
+        "provider": "password",
+        "role": "user",
+        "status": "pending_activation"
+      },
+      "sampleAdminUid": {
+        "createdAt": 0,
+        "email": "admin@example.com",
+        "emailVerified": true,
+        "lastLoginAt": 0,
+        "mobile": "+91 9876543210",
+        "name": "Admin User",
+        "provider": "password",
+        "role": "admin",
+        "status": "active"
+      }
+    }
+  }
+}

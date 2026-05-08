@@ -1,116 +1,118 @@
-# 🌿 AeroSaffron – Smart Aeroponics System
+# AeroSaffron Smart Aeroponics System
 
-AeroSaffron is a Full-stack IoT-based smart aeroponics system designed to monitor, control, and automate plant growth conditions using real-time cloud connectivity.
+AeroSaffron is an ESP32 + Firebase + web dashboard project for monitoring and controlling an aeroponics chamber. The system reads temperature, humidity, and Lux, pushes live data to Firebase Realtime Database, and controls the mist pump, fan, grow light, and Peltier cooler through relay outputs.
 
-It integrates ESP32, Arduino UNO, sensors, Firebase Realtime Database, and a modern SaaS-style web dashboard to provide a complete smart farming solution.
+The current version supports:
 
----
+- Temperature, humidity, and Lux monitoring
+- Device online/offline heartbeat
+- Auto and Manual control modes
+- Manual relay control from the dashboard
+- Automatic Fan, Light, and Peltier control using min/max thresholds
+- Mist pump cycle automation
+- OLED display pages for sensors, Lux, devices, and system status
+- Firebase Realtime Database schema exports
+- Static website dashboard with Chart.js
 
-# 🚀 Features
-
-## 🌡️ Real-Time Monitoring
-
-* Temperature (°C)
-* Humidity (%)
-* Light Intensity
-* Water Level (%)
-
-## 🎛️ Remote Device Control
-
-* Mist Pump
-* Fan
-* LED Grow Light
-* Cooling System (Peltier)
-
-## 🤖 Automation System
-
-* Automatic decision-making based on sensor data
-* Configurable thresholds via web dashboard
-* Smart scheduling (LED timing, mist cycles)
-
-## 🔔 Alert System
-
-* High temperature warning
-* Low humidity alert
-* Low water level detection
-* Real-time alerts on dashboard
-
-## 📊 Data Analytics
-
-* Temperature & humidity graphs
-* Historical trends
-* CSV export support
-
-## 🌐 SaaS Dashboard
-
-* Modern UI/UX
-* Fully responsive design
-* Real-time sync with Firebase
-
----
-
-# 🧠 System Architecture
+## Project Files
 
 ```text
-Frontend (Web Dashboard)
-        ↓
-Firebase Realtime Database
-        ↓
-ESP32 (Main Controller)
-        ↓
-Arduino UNO (Relay + Display Controller)
-        ↓
-Physical Devices (Pump, Fan, LED, Cooling System)
+New folder/
+  dashboard.html
+  app.js
+  style.css
+  index.html
+  README.md
+  aerosaffron.json
+  aeroponics-53851-default-rtdb-export.json
+  AeroSaffron_ESP32/
+    AeroSaffron_ESP32.ino
 ```
 
+## System Architecture
 
+```text
+Sensors + Relays + OLED
+        |
+      ESP32
+        |
+      WiFi
+        |
+Firebase Realtime Database
+        |
+Web Dashboard
+```
 
-# ⚙️ Hardware Components
+The dashboard never controls GPIO pins directly. It writes commands to Firebase. The ESP32 listens to Firebase and triggers the relay pins.
 
-| Component                | Description                   |
-| ------------------------ | ----------------------------- |
-| ESP32                    | Main controller with WiFi     |
-| Arduino UNO              | Relay + OLED controller       |
-| DHT22                    | Temperature & humidity sensor |
-| Light Sensor             | Measures light intensity      |
-| Water Level Sensor       | Detects tank level            |
-| Relay Module (4-channel) | Controls devices              |
-| OLED Display             | Local display (Arduino)       |
-| Logic Level Converter    | ESP32 ↔ Arduino communication |
+## Hardware Connections
 
----
+| Module | ESP32 Pin | Notes |
+| --- | ---: | --- |
+| DHT22 data | GPIO 4 | Temperature and humidity |
+| Water level analog sensor | GPIO 34 | Legacy reading, no longer shown on dashboard |
+| LDR / light sensor | GPIO 35 | Converted to Lux approximation |
+| Mist pump relay | GPIO 26 | Relay output |
+| Fan relay | GPIO 27 | Relay output |
+| LED grow light relay | GPIO 14 | Relay output |
+| Peltier relay | GPIO 12 | Relay output |
+| OLED SDA | GPIO 21 | I2C |
+| OLED SCL | GPIO 22 | I2C |
 
-# 🔌 Role Division
+The firmware assumes common active-low relay modules:
 
-## 🟢 ESP32 (Main Brain)
+```cpp
+#define RELAY_ACTIVE_LOW true
+```
 
-* Connects to WiFi
-* Sends & receives data from Firebase
-* Reads sensors
-* Executes automation logic
-* Sends control signals to Arduino
+If your relay module is active-high, change it to:
 
-## 🔵 Arduino UNO
+```cpp
+#define RELAY_ACTIVE_LOW false
+```
 
-* Controls relay module
-* Drives OLED display
-* Executes commands from ESP32
+## Required Arduino Libraries
 
----
+Install these in Arduino IDE Library Manager:
 
-# ☁️ Firebase Integration
+- Firebase ESP Client by Mobizt
+- DHT sensor library by Adafruit
+- Adafruit Unified Sensor
+- Adafruit SSD1306
+- Adafruit GFX Library
+- ArduinoJson
 
-The system uses **Firebase Realtime Database** for:
+## ESP32 Setup
 
-* Real-time data synchronization
-* Device control
-* Storing sensor values
-* Automation settings
-* Alerts
+Open:
 
----
+```text
+AeroSaffron_ESP32/AeroSaffron_ESP32.ino
+```
 
-## 📂 Database Structure
+Update these values before uploading:
+
+```cpp
+#define WIFI_SSID        "YOUR_WIFI_NAME"
+#define WIFI_PASSWORD    "YOUR_WIFI_PASSWORD"
+#define FIREBASE_HOST    "YOUR_DATABASE_HOST"
+#define FIREBASE_AUTH    "YOUR_DATABASE_SECRET_OR_TOKEN"
+```
+
+Then upload the sketch to your ESP32 from Arduino IDE.
+
+Important: relay control will not work with only the website update. The ESP32 must be flashed with the updated firmware because Auto/Manual mode and threshold logic are handled inside the ESP32 sketch.
+
+## Firebase Database Schema
+
+Use either of these files as the initial database import:
+
+```text
+aerosaffron.json
+aeroponics-53851-default-rtdb-export.json
+```
+
+Current schema:
 
 ```json
 {
@@ -118,193 +120,268 @@ The system uses **Firebase Realtime Database** for:
     "sensors": {
       "temperature": 25,
       "humidity": 60,
-      "light": 200,
-      "waterLevel": 50
+      "lux": 200,
+      "light": 200
     },
     "controls": {
       "pump": 0,
-      "fan": 0,
       "light": 0,
-      "peltier": 0
+      "fan": 0,
+      "peltier": 0,
+      "_refresh": 0
     },
     "settings": {
+      "controlMode": "auto",
       "tempSet": 23,
       "humSet": 65,
       "mistDuration": 30,
       "mistInterval": 15,
       "ledStart": "06:00",
-      "ledEnd": "22:00"
+      "ledEnd": "22:00",
+      "fanMin": 24,
+      "fanMax": 30,
+      "lightMin": 120,
+      "lightMax": 350,
+      "peltierMin": 18,
+      "peltierMax": 26
+    },
+    "device": {
+      "online": false,
+      "lastSeen": 0,
+      "ip": ""
     },
     "alerts": {
       "msg": "System Normal"
+    },
+    "automation": {
+      "rule1": {
+        "condition": "temperature > 30",
+        "action": "fan_on",
+        "status": 1
+      },
+      "rule2": {
+        "condition": "lux < 120",
+        "action": "light_on",
+        "status": 1
+      },
+      "rule3": {
+        "condition": "temperature > 26",
+        "action": "peltier_on",
+        "status": 1
+      }
     }
   }
 }
 ```
 
----
+## Control Modes
 
-# 🌐 Web Dashboard Modules
+### Auto Mode
 
-## 🟢 Dashboard
+In Auto mode, manual dashboard toggles are disabled. The ESP32 automatically controls devices from threshold settings:
 
-* Live sensor data cards
-* Device status indicators
-* Temperature & humidity graphs
-* Quick control panel
+| Device | ON condition | OFF condition |
+| --- | --- | --- |
+| Fan | `temperature >= fanMax` | `temperature <= fanMin` |
+| Light | `lux <= lightMin` | `lux >= lightMax` |
+| Peltier | `temperature >= peltierMax` | `temperature <= peltierMin` |
+| Mist pump | Humidity/mist cycle logic | Mist duration completed |
 
-## 🟡 Device Control
+### Manual Mode
 
-* Toggle ON/OFF:
+In Manual mode, dashboard toggles are enabled. Pressing a toggle writes to:
 
-  * Pump
-  * Fan
-  * Light
-  * Cooling
+```text
+aerosaffron/controls/{device}
+```
 
-## 🔵 Settings
+The ESP32 stream receives the command and triggers the relay pin.
 
-* Temperature setpoint
-* Humidity setpoint
-* LED timing
-* Mist duration & interval
+When Auto/Manual is switched, the website updates:
 
-## 🟣 Automation Rules
+```text
+aerosaffron/settings/controlMode
+aerosaffron/controls/_refresh
+```
 
-* IF–THEN logic system
-* Example:
+The `_refresh` value wakes the ESP32 controls stream so the firmware immediately reloads the latest control mode.
 
-  * IF temperature > 24°C → Cooling ON
-  * IF humidity < 50% → Pump ON
+## Website Dashboard
 
-## 📊 Analytics
+Main dashboard file:
 
-* Historical data visualization
-* Graphs using Chart.js
-* CSV download
+```text
+dashboard.html
+```
 
-## 🔔 Alerts
+Main JavaScript file:
 
-* Displays system warnings
-* Real-time updates from Firebase
+```text
+app.js
+```
 
----
+Main stylesheet:
 
-# 🔄 System Workflow
+```text
+style.css
+```
 
-1. Sensors collect environmental data
-2. ESP32 reads sensor values
-3. Data is sent to Firebase
-4. Web dashboard displays real-time data
-5. User updates settings or controls devices
-6. ESP32 reads updated values from Firebase
-7. Automation logic is executed
-8. Commands sent to Arduino
-9. Arduino activates relays
-10. Devices operate accordingly
+The dashboard includes:
 
----
+- Firebase Authentication with Sign in, Sign up, Google sign-in, and email activation mail
+- User profile records with name, email, mobile number, role, provider, status, and login timestamps
+- Admin dashboard for registered users, activation status, live device state, relay status, rules, and alerts
+- Sensor cards for temperature, humidity, and Lux
+- Device online/offline status
+- Pump, Fan, Light, and Peltier status
+- Auto/Manual mode buttons
+- Manual device toggles
+- Threshold settings
+- Automation rules
+- Alerts table
+- Analytics charts
+- CSV export
 
-# 🤖 Automation Logic
+## Running the Website Locally
 
-* Temperature > Setpoint → Fan ON
-* Humidity < Setpoint → Pump ON
-* LED controlled by schedule
-* Mist system runs based on interval & duration
-* Alerts generated when thresholds exceed
+Because `app.js` is loaded as a JavaScript module, run a local server instead of opening `dashboard.html` directly.
 
----
+From the project folder:
 
-# 🎛️ Control Modes
+```powershell
+python -m http.server 8080 -b 127.0.0.1
+```
 
-## Manual Mode
+Open:
 
-* User directly controls devices via dashboard
+```text
+http://127.0.0.1:8080/dashboard.html
+```
 
-## Automatic Mode
+## Authentication Setup
 
-* System operates based on sensor data & rules
+In Firebase Console, enable these sign-in providers:
 
----
+- Email/Password
+- Google
 
-# 🔁 Real-Time Synchronization
+The dashboard writes registered profiles to:
 
-* Uses Firebase `onValue()` listeners
-* Instant updates without refresh
-* Bidirectional sync:
+```text
+aerosaffron/users/{uid}
+```
 
-  * Website → Firebase → ESP32
-  * ESP32 → Firebase → Website
+New email/password accounts include the mobile number entered during registration and receive a Firebase activation email through `sendEmailVerification()`. Users are signed out after registration and cannot enter the dashboard until the email is verified.
 
----
+To allow an account to see the Admin dashboard, set its profile role in Realtime Database:
 
-# 🎨 UI/UX Design
+```json
+{
+  "role": "admin"
+}
+```
 
-* Modern SaaS-style dashboard
-* Sidebar navigation
-* Card-based layout
-* Responsive (mobile + desktop)
-* Status badges (ACTIVE / INACTIVE)
+Admin users can edit other users between `user` and `admin` roles from the Admin dashboard.
 
----
+The dashboard also includes a local bootstrap admin login for project setup:
 
-# 📡 Communication Protocols
+```text
+Email: admin@aerosaffron.com
+Password: Aerosaffron222
+```
 
-| Communication     | Method          |
-| ----------------- | --------------- |
-| ESP32 ↔ Firebase  | WiFi (HTTP)     |
-| ESP32 ↔ Arduino   | Serial (TX/RX)  |
-| Arduino ↔ Devices | Relay switching |
+This bootstrap admin is marked active in the Realtime Database profile schema and opens the Admin dashboard without sending an activation email.
+The bootstrap admin session is stored in browser local storage, so refreshing the page keeps the Admin dashboard open and reloads live data instead of returning to the login screen.
 
----
+Client-side role checks control the UI. For production, also add Firebase Realtime Database security rules so only authenticated users can read/write operational data and only admin users can read all user profiles.
 
-# 🔐 Security
+## OLED Display
 
-* Firebase rules open for development
-* Can be secured using:
+The firmware initializes SSD1306 OLED displays at:
 
-  * Authentication
-  * Role-based access
+- `0x3C`
+- fallback `0x3D`
 
----
+If OLED data is not shown:
 
-# 🚀 Future Enhancements
+1. Check SDA is on GPIO 21.
+2. Check SCL is on GPIO 22.
+3. Check OLED VCC and GND.
+4. Confirm the display is SSD1306 128x64.
+5. Confirm the I2C address is `0x3C` or `0x3D`.
 
-* 📱 Mobile App (Flutter)
-* 🤖 AI-based anomaly detection
-* 📲 Telegram / SMS alerts
-* ⏱️ RTC for precise scheduling
-* ☁️ Cloud deployment (AWS / Render)
-* 👥 Multi-user support
+OLED pages rotate every 2 seconds:
 
----
+- Temperature and humidity
+- Lux monitor
+- Device status
+- WiFi/Firebase/system status
 
-# 📊 Project Outcome
+## Device Online/Offline Status
 
-* Real-time IoT monitoring system achieved
-* Automated control reduces manual effort
-* Efficient plant growth management
-* Scalable cloud-based architecture
+The ESP32 pushes heartbeat data to:
 
----
+```text
+aerosaffron/device
+```
 
-# 🎓 Conclusion
+Fields:
 
-AeroSaffron demonstrates a **complete integration of IoT, cloud computing, and automation** for smart agriculture.
+- `online`: ESP32 online flag
+- `lastSeen`: timestamp in milliseconds
+- `ip`: ESP32 local IP address
 
-It showcases how modern technologies can be combined to create an **intelligent, scalable, and user-friendly farming solution**.
+The dashboard marks the device offline if the heartbeat becomes stale.
 
----
+## Troubleshooting Relay Control
 
-# 👨‍💻 Author
+If dashboard buttons do not trigger relays:
 
-**AeroSaffron Team**
-Final Year Project – Computer Science Engineering
+1. Upload the updated ESP32 sketch.
+2. Switch the dashboard to Manual mode.
+3. Confirm Firebase changes under `aerosaffron/controls`.
+4. Open Serial Monitor at `115200`.
+5. Confirm the ESP32 prints stream events.
+6. Check `RELAY_ACTIVE_LOW` matches your relay module.
+7. Check relay VCC, GND, and GPIO wiring.
+8. Confirm your Firebase host and auth token are correct.
 
----
+Expected manual control flow:
 
-# ⭐ If you like this project
+```text
+Dashboard button
+  -> Firebase controls value changes
+  -> ESP32 controls stream receives update
+  -> ESP32 calls applyDeviceStates()
+  -> Relay pin changes state
+```
 
-Give it a ⭐ on GitHub and support smart agriculture 🌱
+## Troubleshooting Auto Mode
 
----
+If Auto mode does not turn devices on/off:
+
+1. Confirm `settings/controlMode` is `auto`.
+2. Confirm threshold values are valid.
+3. Confirm `fanMin < fanMax`.
+4. Confirm `lightMin < lightMax`.
+5. Confirm `peltierMin < peltierMax`.
+6. Confirm sensor values are updating in `aerosaffron/sensors`.
+7. Watch Serial Monitor for `[Auto]` messages.
+
+## Notes
+
+- The website displays Lux instead of water level.
+- `sensors/light` is kept for backward compatibility.
+- `sensors/lux` is the preferred current field.
+- The water level sensor may still be read by firmware, but it is not shown on the dashboard.
+- Do not expose production Firebase credentials in a public repository.
+
+## Validation Performed
+
+During the latest update:
+
+- `app.js` syntax check passed.
+- Firebase JSON schema files parsed successfully.
+- Local dashboard server responded successfully.
+
+Arduino compilation was not run in this workspace because `arduino-cli` is not installed.

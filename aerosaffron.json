@@ -3,42 +3,89 @@
     "sensors": {
       "temperature": 25,
       "humidity": 60,
-      "light": 200,
-      "waterLevel": 50
+      "lux": 200,
+      "light": 200
     },
     "controls": {
       "pump": 0,
       "light": 0,
       "fan": 0,
-      "peltier": 0
+      "peltier": 0,
+      "_refresh": 0
     },
     "settings": {
+      "controlMode": "auto",
       "tempSet": 23,
       "humSet": 65,
       "mistDuration": 30,
       "mistInterval": 15,
       "ledStart": "06:00",
-      "ledEnd": "22:00"
+      "ledEnd": "22:00",
+      "fanMin": 24,
+      "fanMax": 30,
+      "lightMin": 120,
+      "lightMax": 350,
+      "peltierMin": 18,
+      "peltierMax": 26
+    },
+    "device": {
+      "online": false,
+      "lastSeen": "0",
+      "ip": ""
     },
     "alerts": {
       "msg": "System Normal"
     },
-
     "automation": {
       "rule1": {
-        "condition": "temperature > 24",
-        "action": "peltier_on",
+        "condition": "temperature > 30",
+        "action": "fan_on",
         "status": 1
       },
       "rule2": {
-        "condition": "humidity < 50",
-        "action": "pump_on",
+        "condition": "lux < 120",
+        "action": "light_on",
         "status": 1
       },
       "rule3": {
-        "condition": "waterLevel < 20",
-        "action": "alert",
+        "condition": "temperature > 26",
+        "action": "peltier_on",
         "status": 1
+      }
+    },
+    "users": {
+      "adminAerosaffronBootstrap": {
+        "name": "AeroSaffron Admin",
+        "email": "admin@aerosaffron.com",
+        "mobile": "",
+        "role": "admin",
+        "provider": "local_admin",
+        "emailVerified": true,
+        "createdAt": 0,
+        "lastLoginAt": 0,
+        "status": "active"
+      },
+      "sampleUserUid": {
+        "name": "Demo User",
+        "email": "user@example.com",
+        "mobile": "+91 9876543210",
+        "role": "user",
+        "provider": "password",
+        "emailVerified": false,
+        "createdAt": 0,
+        "lastLoginAt": 0,
+        "status": "pending_activation"
+      },
+      "sampleAdminUid": {
+        "name": "Admin User",
+        "email": "admin@example.com",
+        "mobile": "+91 9876543210",
+        "role": "admin",
+        "provider": "password",
+        "emailVerified": true,
+        "createdAt": 0,
+        "lastLoginAt": 0,
+        "status": "active"
       }
     }
   }

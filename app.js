@@ -1,6 +1,18 @@
 // ===== FIREBASE CONFIG =====
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
-import { getDatabase, ref, set, onValue, push, update } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js";
+import { getDatabase, ref, set, get, onValue, push, update } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js";
+import {
+  getAuth,
+  createUserWithEmailAndPassword,
+  signInWithEmailAndPassword,
+  signInWithPopup,
+  GoogleAuthProvider,
+  sendEmailVerification,
+  sendPasswordResetEmail,
+  updateProfile,
+  signOut,
+  onAuthStateChanged
+} from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAtzB7DcXqq0VuER7FTahxDDq7S3Rc-Igc",
@@ -15,18 +27,54 @@ const firebaseConfig = {
 
 const app = initializeApp(firebaseConfig);
 const db = getDatabase(app);
+const auth = getAuth(app);
+const googleProvider = new GoogleAuthProvider();
+const ADMIN_BOOTSTRAP = {
+  uid: 'adminAerosaffronBootstrap',
+  email: 'admin@aerosaffron.com',
+  password: 'Aerosaffron222',
+  name: 'AeroSaffron Admin',
+  mobile: '',
+  role: 'admin',
+  provider: 'local_admin',
+  emailVerified: true,
+  status: 'active'
+};
+const ADMIN_BOOTSTRAP_SESSION_KEY = 'aerosaffron_bootstrap_admin_session';
 
 // ===== APP STATE =====
 window.AeroApp = {
-  sensors: { temperature: 0, humidity: 0, light: 0, waterLevel: 0 },
+  sensors: { temperature: 0, humidity: 0, lux: 0, light: 0 },
   controls: { pump: 0, fan: 0, light: 0, peltier: 0 },
-  settings: { tempSet: 23, humSet: 65, mistDuration: 30, mistInterval: 15, ledStart: "06:00", ledEnd: "22:00" },
+  settings: {
+    controlMode: "auto",
+    tempSet: 23,
+    humSet: 65,
+    mistDuration: 30,
+    mistInterval: 15,
+    ledStart: "06:00",
+    ledEnd: "22:00",
+    fanMin: 24,
+    fanMax: 30,
+    lightMin: 120,
+    lightMax: 350,
+    peltierMin: 18,
+    peltierMax: 26
+  },
   alerts: { msg: "System Normal" },
+  device: { online: false, lastSeen: 0, ip: "", heartbeatReceivedAt: 0 },
   tempHistory: [],
   humHistory: [],
   pumpHistory: [],
   rules: [],
   alertLog: [],
+  users: [],
+  currentUser: null,
+  currentProfile: null,
+  isAdmin: false,
+  isBootstrapAdmin: false,
+  usersUnsubscribe: null,
+  selectedAdminUserUid: null,
   charts: {},
   connected: false
 };
@@ -44,6 +92,248 @@ function showToast(msg, type = 'success') {
 }
 window.showToast = showToast;
 
+// ===== AUTHENTICATION =====
+function setAuthMode(mode) {
+  const isSignup = mode === 'signup';
+  document.querySelectorAll('[data-auth-mode]').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.authMode === mode);
+  });
+  const signupFields = document.getElementById('signup-fields');
+  if (signupFields) signupFields.hidden = !isSignup;
+  const nameInput = document.getElementById('auth-name');
+  const mobileInput = document.getElementById('auth-mobile');
+  if (nameInput) nameInput.required = isSignup;
+  if (mobileInput) mobileInput.required = isSignup;
+  if (!isSignup) {
+    if (nameInput) nameInput.value = '';
+    if (mobileInput) mobileInput.value = '';
+  }
+  const password = document.getElementById('auth-password');
+  if (password) password.autocomplete = isSignup ? 'new-password' : 'current-password';
+  const submit = document.getElementById('auth-submit');
+  if (submit) submit.textContent = isSignup ? 'Create account' : 'Sign in';
+  const helper = document.getElementById('auth-helper');
+  if (helper) helper.textContent = isSignup
+    ? 'An activation link will be sent after registration.'
+    : 'Use your registered email or continue with Google.';
+}
+window.setAuthMode = setAuthMode;
+
+function updateAuthUI() {
+  const signedIn = Boolean(AeroApp.currentUser);
+  document.body.classList.toggle('auth-ready', signedIn);
+  document.body.classList.toggle('admin-session', signedIn && AeroApp.isAdmin);
+  const authGate = document.getElementById('auth-gate');
+  if (authGate) authGate.hidden = signedIn;
+  const appShell = document.getElementById('app-shell');
+  if (appShell) appShell.hidden = !signedIn;
+
+  const profile = AeroApp.currentProfile || {};
+  const name = profile.name || AeroApp.currentUser?.displayName || AeroApp.currentUser?.email || 'User';
+  const userName = document.getElementById('user-display-name');
+  if (userName) userName.textContent = name;
+  const userAvatar = document.getElementById('user-avatar');
+  if (userAvatar) userAvatar.textContent = name.trim().charAt(0).toUpperCase() || 'U';
+  const verifyBadge = document.getElementById('email-verify-badge');
+  if (verifyBadge) {
+    const verified = AeroApp.currentUser?.emailVerified === true;
+    verifyBadge.textContent = verified ? 'Verified' : 'Verify email';
+    verifyBadge.className = `btn btn-outline btn-sm ${verified ? 'badge-on' : 'badge-warning'}`;
+  }
+  const adminNav = document.getElementById('admin-nav-item');
+  if (adminNav) adminNav.hidden = !AeroApp.isAdmin;
+}
+
+function subscribeAdminUsers() {
+  if (AeroApp.usersUnsubscribe) return;
+  AeroApp.usersUnsubscribe = onValue(ref(db, 'aerosaffron/users'), (snap) => {
+    const data = snap.val() || {};
+    AeroApp.users = Object.keys(data).map(uid => ({ uid, ...data[uid] }));
+    renderAdminDashboard();
+  }, (err) => {
+    console.error(err);
+    showToast('Admin user list access denied', 'error');
+  });
+}
+
+function unsubscribeAdminUsers() {
+  if (AeroApp.usersUnsubscribe) {
+    AeroApp.usersUnsubscribe();
+    AeroApp.usersUnsubscribe = null;
+  }
+  AeroApp.users = [];
+  renderAdminDashboard();
+}
+
+async function signInBootstrapAdmin(options = {}) {
+  const { silent = false } = options;
+  const now = Date.now();
+  await update(ref(db, `aerosaffron/users/${ADMIN_BOOTSTRAP.uid}`), {
+    name: ADMIN_BOOTSTRAP.name,
+    email: ADMIN_BOOTSTRAP.email,
+    mobile: ADMIN_BOOTSTRAP.mobile,
+    role: ADMIN_BOOTSTRAP.role,
+    provider: ADMIN_BOOTSTRAP.provider,
+    emailVerified: true,
+    status: 'active',
+    createdAt: now,
+    lastLoginAt: now
+  });
+  AeroApp.currentUser = {
+    uid: ADMIN_BOOTSTRAP.uid,
+    email: ADMIN_BOOTSTRAP.email,
+    displayName: ADMIN_BOOTSTRAP.name,
+    emailVerified: true
+  };
+  AeroApp.currentProfile = { ...ADMIN_BOOTSTRAP, createdAt: now, lastLoginAt: now };
+  AeroApp.isAdmin = true;
+  AeroApp.isBootstrapAdmin = true;
+  localStorage.setItem(ADMIN_BOOTSTRAP_SESSION_KEY, 'active');
+  subscribeAdminUsers();
+  updateAuthUI();
+  navigateTo('admin');
+  if (!silent) showToast('Admin signed in', 'success');
+}
+
+async function handleAuthSubmit(event) {
+  event.preventDefault();
+  const mode = document.querySelector('[data-auth-mode].active')?.dataset.authMode || 'signin';
+  const email = document.getElementById('auth-email')?.value.trim();
+  const password = document.getElementById('auth-password')?.value;
+  const name = document.getElementById('auth-name')?.value.trim();
+  const mobile = document.getElementById('auth-mobile')?.value.trim();
+
+  if (!email || !password) {
+    showToast('Email and password are required', 'warning');
+    return;
+  }
+
+  try {
+    if (mode === 'signup') {
+      if (!name || !mobile) {
+        showToast('Name and mobile number are required', 'warning');
+        return;
+      }
+      const cred = await createUserWithEmailAndPassword(auth, email, password);
+      await updateProfile(cred.user, { displayName: name });
+      await set(ref(db, `aerosaffron/users/${cred.user.uid}`), {
+        name,
+        email,
+        mobile,
+        role: 'user',
+        provider: 'password',
+        emailVerified: false,
+        createdAt: Date.now(),
+        lastLoginAt: Date.now(),
+        status: 'pending_activation'
+      });
+      await sendEmailVerification(cred.user);
+      await signOut(auth);
+      setAuthMode('signin');
+      showToast('Account created. Check your email to activate login.', 'success');
+    } else {
+      if (email.toLowerCase() === ADMIN_BOOTSTRAP.email && password === ADMIN_BOOTSTRAP.password) {
+        await signInBootstrapAdmin();
+        return;
+      }
+      const cred = await signInWithEmailAndPassword(auth, email, password);
+      await cred.user.reload();
+      if (!cred.user.emailVerified) {
+        await sendEmailVerification(cred.user).catch(() => {});
+        await signOut(auth);
+        showToast('Please verify your email before signing in. Activation mail sent again.', 'warning');
+        return;
+      }
+      showToast('Signed in successfully', 'success');
+    }
+  } catch (err) {
+    showToast(err.message || 'Authentication failed', 'error');
+  }
+}
+window.handleAuthSubmit = handleAuthSubmit;
+
+async function signInWithGoogle() {
+  try {
+    const cred = await signInWithPopup(auth, googleProvider);
+    const user = cred.user;
+    await user.reload();
+    if (!user.emailVerified) {
+      await signOut(auth);
+      showToast('Please verify your email before signing in.', 'warning');
+      return;
+    }
+    const profileRef = ref(db, `aerosaffron/users/${user.uid}`);
+    const existing = (await get(profileRef)).val();
+    await update(profileRef, {
+      name: user.displayName || 'Google User',
+      email: user.email || '',
+      mobile: existing?.mobile || '',
+      role: existing?.role || 'user',
+      provider: 'google',
+      emailVerified: user.emailVerified,
+      createdAt: existing?.createdAt || Date.now(),
+      lastLoginAt: Date.now(),
+      status: user.emailVerified ? 'active' : 'pending_activation'
+    });
+    showToast('Signed in with Google', 'success');
+  } catch (err) {
+    showToast(err.message || 'Google sign-in failed', 'error');
+  }
+}
+window.signInWithGoogle = signInWithGoogle;
+
+async function forgotPassword() {
+  const email = document.getElementById('auth-email')?.value.trim();
+  if (!email) {
+    showToast('Enter your email first', 'warning');
+    return;
+  }
+  if (email.toLowerCase() === ADMIN_BOOTSTRAP.email) {
+    showToast('Bootstrap admin password is managed in project settings', 'info');
+    return;
+  }
+  try {
+    await sendPasswordResetEmail(auth, email);
+    showToast('Password reset email sent', 'success');
+  } catch (err) {
+    showToast(err.message || 'Could not send reset email', 'error');
+  }
+}
+window.forgotPassword = forgotPassword;
+
+async function resendActivationMail() {
+  if (AeroApp.isBootstrapAdmin) {
+    showToast('Bootstrap admin is already active', 'info');
+    return;
+  }
+  if (!auth.currentUser) return;
+  try {
+    await sendEmailVerification(auth.currentUser);
+    showToast('Activation email sent again', 'success');
+  } catch (err) {
+    showToast(err.message || 'Could not send activation email', 'error');
+  }
+}
+window.resendActivationMail = resendActivationMail;
+
+async function logout() {
+  if (AeroApp.isBootstrapAdmin) {
+    unsubscribeAdminUsers();
+    localStorage.removeItem(ADMIN_BOOTSTRAP_SESSION_KEY);
+    AeroApp.currentUser = null;
+    AeroApp.currentProfile = null;
+    AeroApp.isAdmin = false;
+    AeroApp.isBootstrapAdmin = false;
+    updateAuthUI();
+    navigateTo('dashboard');
+    showToast('Signed out', 'info');
+    return;
+  }
+  await signOut(auth);
+  showToast('Signed out', 'info');
+}
+window.logout = logout;
+
 // ===== NAVIGATION =====
 function initNav() {
   document.querySelectorAll('.nav-item[data-page]').forEach(item => {
@@ -55,6 +345,10 @@ function initNav() {
 }
 
 function navigateTo(page) {
+  if (page === 'admin' && !AeroApp.isAdmin) {
+    showToast('Only admin users can access the admin panel', 'warning');
+    page = 'dashboard';
+  }
   document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
   const navItem = document.querySelector(`.nav-item[data-page="${page}"]`);
   if (navItem) navItem.classList.add('active');
@@ -69,7 +363,8 @@ function navigateTo(page) {
     control: 'Device Control',
     automation: 'Automation Rules',
     analytics: 'Data Analytics',
-    alerts: 'System Alerts'
+    alerts: 'System Alerts',
+    admin: 'Admin Dashboard'
   };
   const tb = document.querySelector('.topbar-title');
   if (tb) tb.textContent = titles[page] || 'Dashboard';
@@ -77,6 +372,7 @@ function navigateTo(page) {
   // Re-render charts when switching to relevant pages
   if (page === 'dashboard') updateDashboardCharts();
   if (page === 'analytics') updateAnalyticsCharts();
+  if (page === 'admin') renderAdminDashboard();
 }
 window.navigateTo = navigateTo;
 
@@ -86,7 +382,8 @@ function initFirebase() {
   onValue(ref(db, 'aerosaffron/sensors'), (snap) => {
     if (snap.exists()) {
       const data = snap.val();
-      AeroApp.sensors = { ...AeroApp.sensors, ...data };
+      const lux = Number(data.lux ?? data.light ?? 0);
+      AeroApp.sensors = { ...AeroApp.sensors, ...data, lux, light: lux };
       updateSensorUI();
       recordHistory(data.temperature, data.humidity);
       checkAutomationRules();
@@ -110,6 +407,20 @@ function initFirebase() {
     if (snap.exists()) {
       AeroApp.settings = { ...AeroApp.settings, ...snap.val() };
       updateSettingsUI();
+      updateControlModeUI();
+    }
+  });
+
+  onValue(ref(db, 'aerosaffron/device'), (snap) => {
+    if (snap.exists()) {
+      const data = snap.val();
+      const previousLastSeen = AeroApp.device.lastSeen;
+      const nextLastSeen = data.lastSeen ?? 0;
+      const heartbeatReceivedAt = String(nextLastSeen) !== String(previousLastSeen)
+        ? Date.now()
+        : AeroApp.device.heartbeatReceivedAt;
+      AeroApp.device = { ...AeroApp.device, ...data, heartbeatReceivedAt };
+      updateDeviceStatusUI();
     }
   });
 
@@ -137,9 +448,61 @@ onValue(ref(db, 'aerosaffron/automation'), (snap) => {
 });
 }
 
+async function initAuth() {
+  const authForm = document.getElementById('auth-form');
+  if (authForm) authForm.addEventListener('submit', handleAuthSubmit);
+  setAuthMode('signin');
+  if (localStorage.getItem(ADMIN_BOOTSTRAP_SESSION_KEY) === 'active') {
+    await signInBootstrapAdmin({ silent: true });
+  }
+
+  onAuthStateChanged(auth, async (user) => {
+    if (AeroApp.isBootstrapAdmin) return;
+    AeroApp.currentUser = user;
+    AeroApp.currentProfile = null;
+    AeroApp.isAdmin = false;
+    unsubscribeAdminUsers();
+
+    if (!user) {
+      updateAuthUI();
+      return;
+    }
+
+    await user.reload();
+    if (!auth.currentUser?.emailVerified) {
+      await signOut(auth);
+      showToast('Please verify your email before signing in.', 'warning');
+      return;
+    }
+
+    update(ref(db, `aerosaffron/users/${user.uid}`), {
+      email: user.email || '',
+      name: user.displayName || user.email || 'User',
+      emailVerified: user.emailVerified,
+      lastLoginAt: Date.now(),
+      status: user.emailVerified ? 'active' : 'pending_activation'
+    }).catch(() => {});
+
+    onValue(ref(db, `aerosaffron/users/${user.uid}`), (snap) => {
+      const profile = snap.val() || {};
+      AeroApp.currentProfile = profile;
+      AeroApp.isAdmin = profile.role === 'admin';
+      if (AeroApp.isAdmin) subscribeAdminUsers();
+      else unsubscribeAdminUsers();
+      updateAuthUI();
+      renderAdminDashboard();
+      if (!AeroApp.isAdmin && document.getElementById('page-admin')?.classList.contains('active')) {
+        navigateTo('dashboard');
+      } else if (AeroApp.isAdmin && document.getElementById('page-dashboard')?.classList.contains('active')) {
+        navigateTo('admin');
+      }
+    });
+  });
+}
+
 function setConnected(state) {
   AeroApp.connected = state;
-  const el = document.querySelector('.conn-indicator');
+  const el = document.getElementById('conn-indicator');
   if (!el) return;
   if (state) {
     el.className = 'conn-indicator';
@@ -150,15 +513,65 @@ function setConnected(state) {
   }
 }
 
+function updateDeviceStatusUI() {
+  const now = Date.now();
+  const rawLastSeen = Number(AeroApp.device.lastSeen || 0);
+  const lastSeen = rawLastSeen > 0 && rawLastSeen < 1000000000000 ? rawLastSeen * 1000 : rawLastSeen;
+  const hasUsableLastSeen = lastSeen > 1000000000000;
+  const epochFresh = hasUsableLastSeen && lastSeen <= now + 10000 && (now - lastSeen) < 30000;
+  const eventFresh = !hasUsableLastSeen && AeroApp.device.heartbeatReceivedAt > 0 && (now - AeroApp.device.heartbeatReceivedAt) < 30000;
+  const onlineFlag = AeroApp.device.online === true || AeroApp.device.online === 1 || AeroApp.device.online === 'true';
+  const fresh = hasUsableLastSeen ? epochFresh : eventFresh;
+  const online = onlineFlag && fresh;
+  AeroApp.device.isOnline = online;
+  const statusText = online ? 'Device Online' : 'Device Offline';
+  const detailText = hasUsableLastSeen
+    ? `${online ? 'Last seen' : 'Stale heartbeat'} ${new Date(lastSeen).toLocaleString('en-IN', { hour12: false })}`
+    : eventFresh
+      ? `Heartbeat received ${new Date(AeroApp.device.heartbeatReceivedAt).toLocaleString('en-IN', { hour12: false })}`
+      : 'Waiting for heartbeat';
+
+  const top = document.getElementById('device-status-pill');
+  if (top) {
+    top.className = `conn-indicator ${online ? '' : 'disconnected'}`;
+    top.innerHTML = `<span class="conn-dot"></span>${statusText}`;
+  }
+
+  const card = document.getElementById('device-online-card');
+  if (card) card.classList.toggle('on-state', online);
+  const label = document.getElementById('device-online-text');
+  if (label) {
+    label.textContent = statusText;
+    label.className = `badge ${online ? 'badge-on' : 'badge-off'}`;
+  }
+  const sub = document.getElementById('device-online-sub');
+  if (sub) sub.textContent = detailText;
+  updateSensorUI();
+  updateControlsUI();
+  renderAdminDashboard();
+}
+
 // ===== SENSOR UI =====
 function updateSensorUI() {
-  const s = AeroApp.sensors;
+  const s = AeroApp.device.isOnline === true
+    ? AeroApp.sensors
+    : { temperature: 0, humidity: 0, lux: 0, light: 0 };
   const setVal = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
 
   setVal('temp-val', `${s.temperature}°C`);
   setVal('hum-val', `${s.humidity}%`);
-  setVal('water-val', `${s.waterLevel}%`);
-  setVal('light-val', `${s.light} lx`);
+  setVal('lux-val', `${s.lux} lx`);
+  setVal('light-val', `${s.lux} lx`);
+
+  if (AeroApp.device.isOnline !== true) {
+    const tempEl = document.getElementById('temp-sub');
+    const humEl = document.getElementById('hum-sub');
+    const luxEl = document.getElementById('lux-sub');
+    if (tempEl) tempEl.textContent = 'Device Offline';
+    if (humEl) humEl.textContent = 'Device Offline';
+    if (luxEl) luxEl.textContent = 'Device Offline';
+    return;
+  }
 
   // Status hints
   const tempEl = document.getElementById('temp-sub');
@@ -171,23 +584,40 @@ function updateSensorUI() {
   if (humEl) {
     humEl.textContent = s.humidity < AeroApp.settings.humSet ? '⚠ Below setpoint' : 'Normal Level';
   }
-  const waterEl = document.getElementById('water-sub');
-  if (waterEl) {
-    waterEl.textContent = s.waterLevel < 20 ? '🚨 Critically Low' : s.waterLevel < 40 ? '⚠ Low' : 'Tank Capacity';
+  const luxEl = document.getElementById('lux-sub');
+  if (luxEl) {
+    if (s.lux < AeroApp.settings.lightMin) luxEl.textContent = 'Below minimum';
+    else if (s.lux > AeroApp.settings.lightMax) luxEl.textContent = 'Above maximum';
+    else luxEl.textContent = 'Target Range';
   }
 }
 
 // ===== CONTROLS UI =====
 function updateControlsUI() {
-  const c = AeroApp.controls;
+  const c = AeroApp.device.isOnline === true
+    ? AeroApp.controls
+    : { pump: 0, fan: 0, light: 0, peltier: 0 };
+  const manualEnabled = AeroApp.settings.controlMode === 'manual' && AeroApp.device.isOnline === true;
 
   ['pump', 'fan', 'light', 'peltier'].forEach(device => {
     const toggle = document.getElementById(`toggle-${device}`);
     if (toggle) toggle.checked = c[device] === 1;
+    if (toggle) toggle.disabled = !manualEnabled;
+    const ctrlToggle = document.getElementById(`toggle-${device}-ctrl`);
+    if (ctrlToggle) ctrlToggle.checked = c[device] === 1;
+    if (ctrlToggle) ctrlToggle.disabled = !manualEnabled;
 
     const statusEl = document.getElementById(`status-${device}`);
     if (statusEl) {
-      statusEl.textContent = c[device] === 1 ? 'Active' : 'Inactive';
+      statusEl.textContent = AeroApp.device.isOnline === true
+        ? c[device] === 1 ? 'Active' : 'Inactive'
+        : 'Device Offline';
+    }
+    const ctrlStatusEl = document.getElementById(`ctrl-status-${device}`);
+    if (ctrlStatusEl) {
+      ctrlStatusEl.textContent = AeroApp.device.isOnline === true
+        ? c[device] === 1 ? 'Active' : 'Inactive'
+        : 'Device Offline';
     }
 
     // Dashboard device status
@@ -204,6 +634,23 @@ function updateControlsUI() {
   });
 }
 
+function updateControlModeUI() {
+  const mode = AeroApp.settings.controlMode || 'auto';
+  document.querySelectorAll('[data-control-mode]').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.controlMode === mode);
+  });
+  const manual = mode === 'manual' && AeroApp.device.isOnline === true;
+  document.querySelectorAll('.manual-only').forEach(el => {
+    el.disabled = !manual;
+    el.classList.toggle('disabled', !manual);
+  });
+  document.querySelectorAll('input[id^="toggle-"]').forEach(el => {
+    el.disabled = !manual;
+  });
+  const modeText = document.getElementById('control-mode-text');
+  if (modeText) modeText.textContent = manual ? 'Manual Control' : 'Auto Control';
+}
+
 // ===== SETTINGS UI =====
 function updateSettingsUI() {
   const s = AeroApp.settings;
@@ -214,6 +661,13 @@ function updateSettingsUI() {
   setInput('inp-ledEnd', s.ledEnd);
   setInput('inp-mistDuration', s.mistDuration);
   setInput('inp-mistInterval', s.mistInterval);
+  setInput('inp-fanMin', s.fanMin);
+  setInput('inp-fanMax', s.fanMax);
+  setInput('inp-lightMin', s.lightMin);
+  setInput('inp-lightMax', s.lightMax);
+  setInput('inp-peltierMin', s.peltierMin);
+  setInput('inp-peltierMax', s.peltierMax);
+  updateControlModeUI();
 }
 
 // ===== ALERTS UI =====
@@ -243,7 +697,7 @@ function renderAlertTable() {
 
   // Merge with static demo alerts
   const demoAlerts = [
-    { type: 'CRITICAL', timestamp: '2025-11-15 10:23:45', msg: 'Water level critically low (15%)' },
+    { type: 'INFO', timestamp: '2025-11-15 10:23:45', msg: 'Lux threshold updated' },
     { type: 'WARNING',  timestamp: '2025-11-15 09:15:22', msg: 'Temperature exceeded threshold (25.5°C)' },
     { type: 'INFO',     timestamp: '2025-11-15 08:00:00', msg: 'LED lights activated automatically' },
     { type: 'WARNING',  timestamp: '2025-11-15 07:45:10', msg: 'Humidity dropped below setpoint (48%)' },
@@ -263,6 +717,257 @@ function renderAlertTable() {
       <td>${a.msg}</td>
     </tr>
   `).join('');
+}
+
+// ===== ADMIN DASHBOARD =====
+function fmtDate(value) {
+  const ts = Number(value || 0);
+  if (!ts) return 'Never';
+  return new Date(ts).toLocaleString('en-IN', { hour12: false });
+}
+
+function avgFromHistory(history) {
+  const values = history.map(item => Number(item.v)).filter(Number.isFinite);
+  if (!values.length) return null;
+  return values.reduce((sum, val) => sum + val, 0) / values.length;
+}
+
+function getSelectedAdminUser() {
+  if (!AeroApp.selectedAdminUserUid && AeroApp.users.length) {
+    AeroApp.selectedAdminUserUid = AeroApp.users[0].uid;
+  }
+  let user = AeroApp.users.find(item => item.uid === AeroApp.selectedAdminUserUid) || null;
+  if (!user && AeroApp.users.length) {
+    AeroApp.selectedAdminUserUid = AeroApp.users[0].uid;
+    user = AeroApp.users[0];
+  }
+  return user;
+}
+
+function selectAdminUser(uid) {
+  if (!AeroApp.isAdmin) return;
+  AeroApp.selectedAdminUserUid = uid;
+  renderAdminDashboard();
+}
+window.selectAdminUser = selectAdminUser;
+
+function setUserRole(uid, role) {
+  if (!AeroApp.isAdmin) {
+    showToast('Only admin users can edit roles', 'warning');
+    return;
+  }
+  if (uid === AeroApp.currentUser?.uid && role !== 'admin') {
+    showToast('You cannot remove admin access from your own active session', 'warning');
+    renderAdminDashboard();
+    return;
+  }
+  update(ref(db, `aerosaffron/users/${uid}`), { role })
+    .then(() => showToast(`User role updated to ${role}`, 'success'))
+    .catch(() => showToast('Failed to update role', 'error'));
+}
+window.setUserRole = setUserRole;
+
+function setUserAccountStatus(uid, status) {
+  if (!AeroApp.isAdmin) {
+    showToast('Only admin users can manage accounts', 'warning');
+    return;
+  }
+  if (uid === AeroApp.currentUser?.uid && status !== 'active') {
+    showToast('You cannot deactivate your own active admin session', 'warning');
+    return;
+  }
+  const active = status === 'active';
+  update(ref(db, `aerosaffron/users/${uid}`), {
+    status,
+    emailVerified: active
+  })
+    .then(() => showToast(`User marked ${active ? 'active' : 'pending'}`, 'success'))
+    .catch(() => showToast('Failed to update account status', 'error'));
+}
+window.setUserAccountStatus = setUserAccountStatus;
+
+function deleteUserProfile(uid, email) {
+  if (!AeroApp.isAdmin) {
+    showToast('Only admin users can manage accounts', 'warning');
+    return;
+  }
+  if (uid === AeroApp.currentUser?.uid) {
+    showToast('You cannot remove your own active admin account', 'warning');
+    return;
+  }
+  const ok = window.confirm(`Remove ${email || 'this user'} from the dashboard user list?`);
+  if (!ok) return;
+  set(ref(db, `aerosaffron/users/${uid}`), null)
+    .then(() => showToast('User profile removed', 'success'))
+    .catch(() => showToast('Failed to remove user profile', 'error'));
+}
+window.deleteUserProfile = deleteUserProfile;
+
+function saveSelectedUserDetails() {
+  const user = getSelectedAdminUser();
+  if (!user || !AeroApp.isAdmin) {
+    showToast('Select a user first', 'warning');
+    return;
+  }
+  const role = document.getElementById('edit-user-role')?.value || 'user';
+  const status = document.getElementById('edit-user-status')?.value || 'pending_activation';
+  if (user.uid === AeroApp.currentUser?.uid && (role !== 'admin' || status !== 'active')) {
+    showToast('You cannot reduce your own active admin access', 'warning');
+    renderAdminDashboard();
+    return;
+  }
+  const payload = {
+    name: document.getElementById('edit-user-name')?.value.trim() || 'Unnamed',
+    email: document.getElementById('edit-user-email')?.value.trim() || user.email || '',
+    mobile: document.getElementById('edit-user-mobile')?.value.trim() || '',
+    role,
+    status,
+    emailVerified: status === 'active'
+  };
+  update(ref(db, `aerosaffron/users/${user.uid}`), payload)
+    .then(() => showToast('User details updated', 'success'))
+    .catch(() => showToast('Failed to update user details', 'error'));
+}
+window.saveSelectedUserDetails = saveSelectedUserDetails;
+
+function sendSelectedUserPasswordReset() {
+  const user = getSelectedAdminUser();
+  if (!user?.email) {
+    showToast('Selected user has no email address', 'warning');
+    return;
+  }
+  if (user.email.toLowerCase() === ADMIN_BOOTSTRAP.email) {
+    showToast('Bootstrap admin password is managed in project settings', 'info');
+    return;
+  }
+  sendPasswordResetEmail(auth, user.email)
+    .then(() => showToast('Password reset email sent', 'success'))
+    .catch(() => showToast('Failed to send password reset email', 'error'));
+}
+window.sendSelectedUserPasswordReset = sendSelectedUserPasswordReset;
+
+function renderAdminDashboard() {
+  if (!document.getElementById('page-admin')) return;
+  if (!AeroApp.isAdmin) {
+    const tbody = document.getElementById('admin-users-tbody');
+    if (tbody) tbody.innerHTML = '<tr><td colspan="7">Admin access required.</td></tr>';
+    return;
+  }
+  const online = AeroApp.device.isOnline === true;
+  const activeDevices = ['pump', 'fan', 'light', 'peltier'].filter(d => AeroApp.controls[d] === 1).length;
+  const activeRules = AeroApp.rules.filter(r => r.active).length;
+  const pendingUsers = AeroApp.users.filter(u => u.status === 'pending_activation' || u.emailVerified === false).length;
+  const avgTemp = avgFromHistory(AeroApp.tempHistory);
+  const avgHum = avgFromHistory(AeroApp.humHistory);
+  const selectedUser = getSelectedAdminUser();
+
+  const setText = (id, text) => {
+    const el = document.getElementById(id);
+    if (el) el.textContent = text;
+  };
+
+  setText('admin-total-users', AeroApp.users.length);
+  setText('admin-user-count-label', `${AeroApp.users.length} users`);
+  setText('admin-header-date', `Updated ${new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}`);
+  setText('admin-pending-users', pendingUsers);
+  setText('admin-device-state', online ? 'Online' : 'Offline');
+  setText('admin-active-devices', activeDevices);
+  setText('admin-active-rules', activeRules);
+  setText('admin-alert-count', AeroApp.alertLog.length);
+  setText('admin-current-temp', online ? `${AeroApp.sensors.temperature} C` : '--');
+  setText('admin-current-hum', online ? `${AeroApp.sensors.humidity}%` : '--');
+  setText('admin-current-lux', online ? `${AeroApp.sensors.lux} lx` : '--');
+  setText('admin-control-mode', AeroApp.settings.controlMode || 'auto');
+  setText('admin-mode-summary', AeroApp.settings.controlMode || 'auto');
+  setText('admin-avg-temp', avgTemp == null ? '--' : `${avgTemp.toFixed(1)} C`);
+  setText('admin-avg-hum', avgHum == null ? '--' : `${avgHum.toFixed(1)}%`);
+  setText('admin-sample-count', AeroApp.tempHistory.length);
+  setText('admin-latest-alert', AeroApp.alertLog[0]?.msg || AeroApp.alerts.msg || 'System Normal');
+  setText('admin-device-ip', AeroApp.device.ip || '--');
+  setText('admin-device-last-seen', fmtDate(AeroApp.device.lastSeen));
+  setText('admin-mist-schedule', `${AeroApp.settings.mistDuration}s / ${AeroApp.settings.mistInterval}m`);
+  setText('admin-led-window', `${AeroApp.settings.ledStart} - ${AeroApp.settings.ledEnd}`);
+
+  const devices = document.getElementById('admin-devices-list');
+  if (devices) {
+    devices.innerHTML = ['pump', 'fan', 'light', 'peltier'].map(device => {
+      const on = AeroApp.controls[device] === 1 && online;
+      return `
+        <div class="admin-device-row">
+          <span>${device.charAt(0).toUpperCase() + device.slice(1)}</span>
+          <span class="badge ${on ? 'badge-on' : 'badge-off'}">${on ? 'ON' : 'OFF'}</span>
+        </div>
+      `;
+    }).join('');
+  }
+
+  const tbody = document.getElementById('admin-users-tbody');
+  if (tbody) {
+    tbody.innerHTML = AeroApp.users.map(user => `
+      <tr class="${user.uid === AeroApp.selectedAdminUserUid ? 'selected-row' : ''}" onclick="selectAdminUser('${user.uid}')">
+        <td>${user.name || 'Unnamed'}</td>
+        <td>${user.email || '-'}</td>
+        <td>${user.mobile || '-'}</td>
+        <td>
+          <select class="role-select" onclick="event.stopPropagation()" onchange="setUserRole('${user.uid}', this.value)" ${user.uid === AeroApp.currentUser?.uid ? 'title="Current admin account"' : ''}>
+            <option value="user" ${(user.role || 'user') === 'user' ? 'selected' : ''}>User</option>
+            <option value="admin" ${user.role === 'admin' ? 'selected' : ''}>Admin</option>
+          </select>
+        </td>
+        <td><span class="badge ${user.emailVerified ? 'badge-on' : 'badge-warning'}">${user.emailVerified ? 'ACTIVE' : 'PENDING'}</span></td>
+        <td style="font-family:'DM Mono',monospace;font-size:12px;">${fmtDate(user.lastLoginAt || user.createdAt)}</td>
+        <td>
+          <div class="account-actions" onclick="event.stopPropagation()">
+            <button class="btn-icon manage" onclick="selectAdminUser('${user.uid}')" title="View user details">
+              View
+            </button>
+            <button class="btn-icon manage" onclick="setUserAccountStatus('${user.uid}', '${user.emailVerified ? 'pending_activation' : 'active'}')" title="${user.emailVerified ? 'Deactivate account' : 'Activate account'}">
+              ${user.emailVerified ? 'Hold' : 'Activate'}
+            </button>
+            <button class="btn-icon danger" onclick="deleteUserProfile('${user.uid}', ${JSON.stringify(user.email || '')})" title="Remove user profile">
+              Delete
+            </button>
+          </div>
+        </td>
+      </tr>
+    `).join('') || '<tr><td colspan="7">No registered users yet.</td></tr>';
+  }
+
+  const empty = document.getElementById('admin-user-empty');
+  const detail = document.getElementById('admin-user-detail');
+  if (empty) empty.hidden = Boolean(selectedUser);
+  if (detail) detail.hidden = !selectedUser;
+  if (!selectedUser) return;
+
+  setText('selected-user-name', selectedUser.name || 'Unnamed');
+  setText('selected-user-email', selectedUser.email || '-');
+  setText('selected-user-mobile', selectedUser.mobile || '-');
+  setText('selected-user-status', selectedUser.emailVerified ? 'Active' : 'Pending');
+  setText('selected-user-provider', selectedUser.provider || '-');
+  setText('selected-user-login', fmtDate(selectedUser.lastLoginAt || selectedUser.createdAt));
+  setText('selected-user-avg-temp', avgTemp == null ? '--' : `${avgTemp.toFixed(1)} C`);
+  setText('selected-user-avg-hum', avgHum == null ? '--' : `${avgHum.toFixed(1)}%`);
+  setText('selected-user-active-relays', activeDevices);
+  setText('selected-user-alerts', AeroApp.alertLog.length);
+  setText('selected-user-device', online ? 'Online' : 'Offline');
+  setText('selected-user-ip', AeroApp.device.ip || '--');
+  setText('selected-user-mode', AeroApp.settings.controlMode || 'auto');
+  setText('selected-user-light-range', `${AeroApp.settings.lightMin} - ${AeroApp.settings.lightMax} lx`);
+
+  const roleBadge = document.getElementById('selected-user-role');
+  if (roleBadge) {
+    roleBadge.textContent = (selectedUser.role || 'user').toUpperCase();
+    roleBadge.className = `badge ${selectedUser.role === 'admin' ? 'badge-info' : 'badge-off'}`;
+  }
+  const setInput = (id, value) => {
+    const el = document.getElementById(id);
+    if (el) el.value = value ?? '';
+  };
+  setInput('edit-user-name', selectedUser.name || '');
+  setInput('edit-user-email', selectedUser.email || '');
+  setInput('edit-user-mobile', selectedUser.mobile || '');
+  setInput('edit-user-role', selectedUser.role || 'user');
+  setInput('edit-user-status', selectedUser.emailVerified ? 'active' : (selectedUser.status || 'pending_activation'));
 }
 
 // ===== HISTORY TRACKING =====
@@ -401,22 +1106,67 @@ function updateAnalyticsCharts() {
 
 // ===== DEVICE CONTROL =====
 function toggleDevice(device, value) {
+  if (!AeroApp.currentUser) {
+    showToast('Please sign in first', 'warning');
+    updateControlsUI();
+    return;
+  }
+  if (AeroApp.settings.controlMode !== 'manual') {
+    showToast('Switch to Manual Control before changing devices', 'warning');
+    updateControlsUI();
+    return;
+  }
   set(ref(db, `aerosaffron/controls/${device}`), value ? 1 : 0)
     .then(() => showToast(`${device.charAt(0).toUpperCase() + device.slice(1)} turned ${value ? 'ON' : 'OFF'}`))
     .catch(() => showToast('Failed to update device', 'error'));
 }
 window.toggleDevice = toggleDevice;
 
+function setControlMode(mode) {
+  if (!AeroApp.currentUser) {
+    showToast('Please sign in first', 'warning');
+    return;
+  }
+  const nextMode = mode === 'manual' ? 'manual' : 'auto';
+  AeroApp.settings.controlMode = nextMode;
+  updateControlModeUI();
+  update(ref(db, 'aerosaffron/settings'), { controlMode: nextMode })
+    .then(() => update(ref(db, 'aerosaffron/controls'), { _refresh: Date.now() }))
+    .then(() => showToast(`${nextMode === 'manual' ? 'Manual' : 'Auto'} control enabled`))
+    .catch(() => {
+      AeroApp.settings.controlMode = nextMode === 'manual' ? 'auto' : 'manual';
+      updateControlModeUI();
+      showToast('Failed to update control mode', 'error');
+    });
+}
+window.setControlMode = setControlMode;
+
 // ===== SETTINGS SAVE =====
 function saveSettings() {
+  if (!AeroApp.currentUser) {
+    showToast('Please sign in first', 'warning');
+    return;
+  }
   const settings = {
     tempSet: parseFloat(document.getElementById('inp-tempSet').value),
     humSet: parseFloat(document.getElementById('inp-humSet').value),
+    controlMode: AeroApp.settings.controlMode || 'auto',
     ledStart: document.getElementById('inp-ledStart').value,
     ledEnd: document.getElementById('inp-ledEnd').value,
     mistDuration: parseInt(document.getElementById('inp-mistDuration').value),
     mistInterval: parseInt(document.getElementById('inp-mistInterval').value),
+    fanMin: parseFloat(document.getElementById('inp-fanMin').value),
+    fanMax: parseFloat(document.getElementById('inp-fanMax').value),
+    lightMin: parseInt(document.getElementById('inp-lightMin').value),
+    lightMax: parseInt(document.getElementById('inp-lightMax').value),
+    peltierMin: parseFloat(document.getElementById('inp-peltierMin').value),
+    peltierMax: parseFloat(document.getElementById('inp-peltierMax').value),
   };
+
+  if (settings.fanMin >= settings.fanMax || settings.lightMin >= settings.lightMax || settings.peltierMin >= settings.peltierMax) {
+    showToast('Minimum threshold must be lower than maximum', 'warning');
+    return;
+  }
 
   set(ref(db, 'aerosaffron/settings'), settings)
     .then(() => { AeroApp.settings = settings; showToast('Settings Saved ✓'); })
@@ -433,7 +1183,7 @@ function loadLocalRules() {
     AeroApp.rules = [
       { id: 1, condition: 'IF temperature > 24°C', action: 'THEN cooling ON', active: true },
       { id: 2, condition: 'IF humidity < 50%', action: 'THEN mist pump ON', active: true },
-      { id: 3, condition: 'IF water level < 20%', action: 'THEN send alert', active: true },
+      { id: 3, condition: 'IF lux < 120 lx', action: 'THEN light ON', active: true },
     ];
     
   }
@@ -454,10 +1204,10 @@ function renderRulesTable() {
       <td><span class="badge ${rule.active ? 'badge-active' : 'badge-inactive'}">${rule.active ? 'ACTIVE' : 'INACTIVE'}</span></td>
       <td>
         <div class="flex gap-2">
-          <button class="btn-icon" onclick="toggleRule(${rule.id})" title="Toggle">
+          <button class="btn-icon" onclick="toggleRule(${JSON.stringify(rule.id)})" title="Toggle">
             ${rule.active ? '⏸' : '▶'}
           </button>
-          <button class="btn-icon" onclick="deleteRule(${rule.id})" title="Delete">🗑</button>
+          <button class="btn-icon" onclick="deleteRule(${JSON.stringify(rule.id)})" title="Delete">🗑</button>
         </div>
       </td>
     </tr>
@@ -465,6 +1215,10 @@ function renderRulesTable() {
 }
 
 function addRule() {
+  if (!AeroApp.currentUser) {
+    showToast('Please sign in first', 'warning');
+    return;
+  }
   const cond = document.getElementById('inp-condition').value.trim();
   const action = document.getElementById('inp-action').value.trim();
   if (!cond || !action) { showToast('Please fill in both fields', 'warning'); return; }
@@ -521,9 +1275,9 @@ function checkAutomationRules() {
     } else if (cond.includes('humidity') && cond.includes('<')) {
       const val = parseFloat(cond.match(/[\d.]+/g)?.pop() || 50);
       if (s.humidity < val) triggered = true;
-    } else if (cond.includes('water') && cond.includes('<')) {
+    } else if ((cond.includes('lux') || cond.includes('light')) && cond.includes('<')) {
       const val = parseFloat(cond.match(/[\d.]+/g)?.pop() || 20);
-      if (s.waterLevel < val) triggered = true;
+      if (s.lux < val) triggered = true;
     }
 
     if (triggered) {
@@ -561,9 +1315,11 @@ window.downloadCSV = downloadCSV;
 // ===== INIT =====
 document.addEventListener('DOMContentLoaded', () => {
   initNav();
+  initAuth();
   initCharts();
   renderRulesTable();
   renderAlertTable();
   initFirebase();
+  setInterval(updateDeviceStatusUI, 5000);
   navigateTo('dashboard');
 });
